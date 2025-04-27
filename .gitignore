@@ -1,0 +1,6 @@
+cache/
+demo/
+storage/
+venv/
+.env
+src/__pycache__
