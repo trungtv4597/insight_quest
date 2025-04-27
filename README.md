@@ -1,6 +1,6 @@
 # insight_quest: Quiz Generator and Telegram Bot
 
-`insight_quest` is a Python application that generates boolean quiz questions from documents stored in AWS S3 using [LlamaIndex]() and delivers them as interactive quizzes via a Telegram bot by [python-telegram-bot](). The project aims to help users reinforce knowledge by creating and scheduling quizzes based on their notes or research documents (or personal data).
+`insight_quest` is a Python application that generates boolean quiz questions from documents stored in AWS S3 using [LlamaIndex](https://docs.llamaindex.ai/en/stable/) and delivers them as interactive quizzes via a Telegram bot by [python-telegram-bot](https://docs.python-telegram-bot.org/en/v21.10/examples.html). The project aims to help users reinforce knowledge by creating and scheduling quizzes based on their notes or research documents (or personal data).
 
 ## Features
 * `Quiz Generation`: 
@@ -12,14 +12,16 @@
 
 ## Project Structure
 
-```mermaid
-A[insight_quest] --> A1[src]
-A --> A2[cache]
-A --> .env
-A --> requirements.txt
-A1 --> B1[app.py]
-A1 --> B2[quiz_generator.py]
-A1 --> B3[s3_operator.py]
+```
+insight_quest/ 
+├── src
+│   ├── app.py # Telegram bot implementation
+│   ├── quiz_generator.py # Logic for quiz generation using LlamaIndex
+│   └── s3_operator.py # S3 utility functions
+├── cache # Local cache for LlamaIndex and quiz data
+├── .env # Environment variables (not tracked)
+├── requirements.txt # Python dependencies
+└── README.md
 ```
 
 ## Installation
@@ -44,7 +46,7 @@ TOTAL_VOTER_COUNT=1
 
 ### Dependencies
 
-*Key libraries used:
+* Key libraries used:
 
 ** `llama-index`: For document processing and quiz generation
 ** `python-telegram-bot`: For Telegram bot functionality
