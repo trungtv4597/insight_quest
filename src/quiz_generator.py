@@ -23,7 +23,6 @@ from llama_index.core.indices import load_index_from_storage
 from llama_index.core.prompts import RichPromptTemplate
 from llama_index.program.openai import OpenAIPydanticProgram
 from llama_index.program.evaporate.df import DFRowsProgram
-from llama_index.core.query_engine import RetrieverQueryEngine
 from pydantic import BaseModel
 
 # lOCAL
@@ -67,20 +66,19 @@ from llama_index.llms.openai import OpenAI
 from llama_index.embeddings.openai import OpenAIEmbedding
 Settings.llm = OpenAI(
     api_key=config.OPENAI_API_KEY,
-    model=config.OPENAI_FM,
-    temperature=0.8
+    model=config.OPENAI_FM
 )
 Settings.embed_model = OpenAIEmbedding(
     api_key=config.OPENAI_API_KEY,
     model=config.OPENAI_EMBED
 )
 
-# LlamaIndex - Tokenizer
-import tiktoken
-from llama_index.core.callbacks import CallbackManager, TokenCountingHandler
-tokenizer = tiktoken.encoding_for_model(config.OPENAI_FM).encode
-token_counter = TokenCountingHandler(tokenizer=tokenizer, verbose=True)
-Settings.callback_manager = CallbackManager([token_counter])
+# # LlamaIndex - Tokenizer
+# import tiktoken
+# from llama_index.core.callbacks import CallbackManager, TokenCountingHandler
+# tokenizer = tiktoken.encoding_for_model(config.OPENAI_FM).encode
+# token_counter = TokenCountingHandler(tokenizer=tokenizer, verbose=True)
+# Settings.callback_manager = CallbackManager([token_counter])
 
 ############# CODE
 
@@ -150,7 +148,8 @@ def load_documents(s3_data: Optional[Dict[str, bytes]]) -> List[Document]:
                 doc_id=key,
                 metadata={
                     "file_path": key,
-                    "mime_type": mime_type or "unknown"
+                    "mime_type": mime_type or "unknown",
+                    "cateogry": "ai-engineering"
                 }
             )
             documents.append(doc)
