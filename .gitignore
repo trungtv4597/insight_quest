@@ -1,6 +1,8 @@
+.ipynb_checkpoints/
 cache/
-demo/
+notebooks/
 storage/
 venv/
 .env
 src/__pycache__
+archive/
