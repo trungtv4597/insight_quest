@@ -1,35 +1,18 @@
-""""""
+"""
+Querying
+"""
 
-############# LOGGING
+########## LOGGING
+
 import logging
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
+)
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
-handler = logging.StreamHandler()
-handler.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
-logger.addHandler(handler)
 
-############# IMPORT
+########## GLOBAL SETTINGS
 
 import os
-from typing import List, Dict, Optional
-import mimetypes
-import pandas as pd
-
-from llama_index.core import Document, StorageContext, VectorStoreIndex
-from llama_index.core.ingestion import IngestionCache, IngestionPipeline
-from llama_index.core.text_splitter import TokenTextSplitter
-from llama_index.core.extractors import SummaryExtractor
-from llama_index.core.indices import load_index_from_storage
-from llama_index.core.prompts import RichPromptTemplate
-from llama_index.program.openai import OpenAIPydanticProgram
-from llama_index.program.evaporate.df import DFRowsProgram
-from pydantic import BaseModel
-
-# lOCAL
-from s3_operator import get_data_from_s3, upload_data_to_s3, download_data_from_s3
-
-############# GLOBAL CONFIGURATIONS
-
 from dotenv import load_dotenv
 
 class Config:
@@ -38,6 +21,9 @@ class Config:
     """
     def __init__(self):
         load_dotenv()
+
+        # Document Storage Map
+        self.LOCAL_DOCUMENT_MAP = os.getenv("LOCAL_DOCUMENT_MAP")
 
         # LlamaIndex - OpenAI
         self.OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -61,6 +47,8 @@ class Config:
 
 config = Config()
 
+########## LLAMAINDEX SETTINGS
+
 from llama_index.core import Settings
 from llama_index.llms.openai import OpenAI
 from llama_index.embeddings.openai import OpenAIEmbedding
@@ -73,217 +61,115 @@ Settings.embed_model = OpenAIEmbedding(
     model=config.OPENAI_EMBED
 )
 
-# # LlamaIndex - Tokenizer
-# import tiktoken
-# from llama_index.core.callbacks import CallbackManager, TokenCountingHandler
-# tokenizer = tiktoken.encoding_for_model(config.OPENAI_FM).encode
-# token_counter = TokenCountingHandler(tokenizer=tokenizer, verbose=True)
-# Settings.callback_manager = CallbackManager([token_counter])
+########## CODE
 
-############# CODE
+from prompting import (
+    prompt_temple,
+    task,
+    context,
+    role
+) 
 
-def sync_cache_local_and_s3(config: Config) -> None:
+import pandas as pd
+import random
+from typing import Dict
+import json
+from tqdm import tqdm
+
+from llama_index.core import StorageContext
+from llama_index.core.indices import load_index_from_storage
+from llama_index.program.openai import OpenAIPydanticProgram
+from llama_index.program.evaporate.df import DFRowsProgram
+
+
+def metadata_filter() -> Dict:
     """
-    It ensures that cache's and S3's version are similar.
     """
-    if os.path.isdir(config.LOCAL_CACHE_PATH):
-        os.makedirs(config.LOCAL_CACHE_PATH)
-        return
+    df = pd.read_csv(r"C:\Users\Dell\OneDrive\Documents\documents\map_of_content.csv")
+
+    # Ensure required columns exist
+    required_columns = ['subject', 'subcategory']
+    if not all(col in df.columns for col in required_columns):
+        raise ValueError("CSV must contain 'subject', 'subcategory' columns")
     
-    for file_name in os.listdir(config.LOCAL_CACHE_PATH):
-        file_path = os.path.join(config.LOCAL_CACHE_PATH, file_name)
-        s3_key = f"{config.S3_LLAMAINDEX_STORAGE_PATH}{file_name}"
-                
-        if os.path.isfile(file_path):
-            # os.remove(file_path) # [BACKLOG] Add logic to compare file metadata (e.g. size, modification time) before syncing
-            download_data_from_s3(s3_key=s3_key, file_path=file_path)
-            logger.info(f"Sync <{file_name}>: <Done>")
-        else:
-            logger.error(f"Sync <{file_name}>: <Fail>")
+    # Get a random subject
+    subjects = df['subject'].unique()
+    selected_subject = random.choice(subjects)
+    
+    # Filter for subcategories under the selected subject
+    subcategories = df[df['subject'] == selected_subject]['subcategory'].unique()
+    selected_subcategory = random.choice(subcategories)
 
-def update_cache_to_s3(config: Config) -> None:
-    """
-    Re-upload all cache files (modified) from local to S3
-    """
-    if os.path.isdir(config.LOCAL_CACHE_PATH):
-        for file_name in os.listdir(config.LOCAL_CACHE_PATH):
-            file_path = os.path.join(config.LOCAL_CACHE_PATH, file_name)
-            s3_key=config.S3_LLAMAINDEX_STORAGE_PATH+file_name
-            # [BACKLOG] Check if upload is needed (e.g., compare hashes)
-            upload_data_to_s3(file_path=file_path, s3_key=s3_key)
-            # logger.info(f"file_path: <{file_name}> \n s3_key: <{S3_LLAMAINDEX_STORAGE+file_name}>")    
+    # Difficulty Level
+    selected_difficulty = random.choice(["junior engineer", "senior engineer"])
+    
+    return {
+        'subject': selected_subject,
+        'subcategory': selected_subcategory,
+        'difficulty': selected_difficulty,
+    }
 
-def load_documents(s3_data: Optional[Dict[str, bytes]]) -> List[Document]:
+def existing_response_filter(config: Config, subject: str, subcategory: str) -> str:
     """
-    Convert S3 data into LlamaIndex Documents, mimicking SimpleDirectoryReader behviors.
+    Filters and retrieves unique questions from a CSV file based on subject, subcategory.
+
     Args:
-        - s3_data: Output from get_data_from_s3, expected as dict {key: bytes} (single or multiple files)
+        subject (str): The main subject area to filter questions.
+        subcategory (str): The subcategory within the subject.
+
     Returns:
-        - List of LlamaIndex Document objects
+        str: A comma-separated string of unique questions matching the criteria.
+             Returns empty string if no matches found or if an error occurs.
+
+    Raises:
+        FileNotFoundError: If the CSV file cannot be located at the specified path.
+        pd.errors.EmptyDataError: If the CSV file is empty.
+        KeyError: If required columns ('subject', 'subcategory', 'question') are missing.
+        Exception: For other unexpected errors during execution.
+
+    Example:
+        >>> existing_response_filter("Math", "Algebra", "Linear Equations")
+        "Solve x + 3 = 7,What is a linear equation?"
+
+    Notes:
+        - The function assumes the CSV file is located at:
+          "C:\\Users\\Dell\\OneDrive\\Documents\\documents\\map_of_content.csv"
+        - The CSV must contain columns: 'subject', 'subcategory', 'question'
+        - Duplicate questions are removed using set conversion
     """
-    if s3_data is None:
-        logger.error(f"No data recived from: <{s3_data}>")
-        return []
-
-    documents = []
-    supported_mimetypes = {"text/plain", "application/pdf", "application/json"}
-    
-    for key, file_bytes in s3_data.items():
-
-        # Skip if key is a folder
-        if key.endswith("/"):
-            continue
-
-        # Determine file pe
-        mime_type, _ = mimetypes.guess_type(key)
-        if mime_type not in supported_mimetypes:
-            logger.warning(f"Unsupported file type <{mime_type}> for <{key}>")
-            continue
-
-        try:
-            # Convert bytes to text
-            text = file_bytes.decode("utf-8", errors="ignore")
-            doc = Document(
-                text=text,
-                doc_id=key,
-                metadata={
-                    "file_path": key,
-                    "mime_type": mime_type or "unknown",
-                    "cateogry": "ai-engineering"
-                }
-            )
-            documents.append(doc)
-        except Exception as e:
-            logger.error(f"Error processing file <{key}>: {e}")
-
-    if not documents:
-        logger.error("No valid dcuments created from s3_data")
-
-    return documents
-
-def load_and_cache_documents(config: Config) -> List[Document]:
-    s3_data = get_data_from_s3(s3_key=config.S3_DOCUMENT_STORAGE_PATH, mode="all")
-    # documents = load_documents(s3_data)
-    # logger.info(f"Load documents after getting raw fomat from s3: <Done> | Len: {len(documents)}")
-    return load_documents(s3_data)
-
-def process_into_nodes(documents: List[Document], config: Config) -> List:
-    # cache_data = get_data_from_s3(s3_key=S3_INGESTION_CACHE_FILE)
-    # ingestion_cache = IngestionCache(cached_hashes=cache_data)
-    ingestion_cache = IngestionCache.from_persist_path(config.LOCAL_INGESTION_CACHE)
-    # logger.info(f"Get cache_ingestion from S3: <Done>")
-
-    pipeline = IngestionPipeline(
-        transformations=[
-            TokenTextSplitter(chunk_size=1024, chunk_overlap=20),
-            SummaryExtractor(summaries=["self"]),
-            Settings.embed_model
-        ],
-        cache=ingestion_cache
-    )
-
-    nodes = pipeline.run(documents=documents)
-    pipeline.cache.persist(config.LOCAL_INGESTION_CACHE)
-    # logger.info(f"Nodes Parsing: <Done> | Len: {len(nodes)}")
-    return nodes
-
-def ingestion(config: Config) -> None:
-    """
-    This function loads <documents> (raw data) and chunks into <nodes>:
-    Workflow:
-        1. Load data from S3
-            * Documents
-            * Ingestion Cache
-        2. Chunk data into nodes
-            * Split documents
-            * Extract metadata
-        3. Store <nodes> config-files
-            * Local cache
-            * Upload to S3
-    """
-    documents = load_and_cache_documents(config)
-    nodes = process_into_nodes(documents, config)
-    storage_context = StorageContext.from_defaults()
-    storage_context.docstore.add_documents(nodes)
-    storage_context.persist(persist_dir=config.LOCAL_CACHE_PATH)
-
-def indexing(config: Config) -> None:
-    """
-    Index nodes for retrieve
-    """
-    # Load nodes config
-    storage_context = StorageContext.from_defaults(persist_dir=config.LOCAL_CACHE_PATH)
-    nodes = list(storage_context.docstore.docs.values())
-
-    # Indexing
-    vector_index = VectorStoreIndex(nodes, storage_context=storage_context)
-    vector_index.set_index_id("vector")
-    logger.info(f"Indexing: <Done>")
-    
-    # Save indecies config 
-    storage_context.persist(persist_dir=config.LOCAL_CACHE_PATH)
-
-def querying(config: Config) -> str:
-    """
-    Enable query engine to answer the prompts
-    """
-    # Load indices
-    storage_context = StorageContext.from_defaults(persist_dir=config.LOCAL_CACHE_PATH)
-    vector_index = load_index_from_storage(storage_context, index_id="vector")
-
-    # Prompting
-    temple = RichPromptTemplate(
-        """
-        Task: {{task_str}}
-        ---
-        Role: {{role_str}}
-        ---
-        Context: {{context_str}}
-        ---
-        Difficulty Level: {{difficulty_str}}
-        ---
-        Output Structure: {{output_str}}
-        ---
-        Avoidance Quiz: {{avoidance_str}}
-        """
-    )
-    prompt_str = temple.format(
-        task_str="Need to create a boolean quiz question based ONLY on provided documents",
-        role_str="Act as a studying assistant who is helping me to reinforce my memories on specific knowledge through asking related question and providing rationle if I answer incorrect",
-        context_str="I always take notes on all the information from my research journeys or daily, but usually forgot the insight after a period of time. I bebeilve it's a good way to improve the siutation by a doing examination regularly",
-        difficulty_str="straightforward but mixing a little tricky",
-        output_str=(
-            "Return a JSON object with the following structure: "
-            "{\"question\": \"<quiz question>\", \"answer\": <boolean>, \"rationale\": \"<explanation>\"}. "
-            "The 'answer' field must be a boolean value (true or false, lowercase, no quotes, no punctuation). "
-            "Example: {\"question\": \"Is the sky blue?\", \"answer\": true, \"rationale\": \"The sky appears blue due to Rayleigh scattering.\"}"
-        )
-    )
-
-    # Query Engine
-    query_engine = vector_index.as_query_engine()
     try:
-        response = query_engine.query(prompt_str)
-        # logger.info(f"LLM Response: <Done>")
+        # Attempt to read the CSV file
+        df = pd.read_csv(config.LOCAL_QUIZ_CACHE)
 
-        # logger.info("Token Usage:")
-        # logger.info(f"\tEmbedding Tokens: {token_counter.total_embedding_token_count}")
-        # logger.info(f"\tLLM Prompt Tokens (Input): {token_counter.prompt_llm_token_count}")
-        # logger.info(f"\tLLM Completion Tokens (Output): {token_counter.completion_llm_token_count}")
-        # logger.info(f"\tTotal LLM Token Count: {token_counter.total_llm_token_count}")
+        # Verify required columns exist
+        required_columns = {'subject', 'subcategory', 'question'}
+        if not required_columns.issubset(df.columns):
+            raise KeyError(f"CSV missing required columns: {required_columns - set(df.columns)}")
 
-        return str(response)
-    except Exception as e:
-        logger.error(f"Query failed: {e}")
+        # Filter questions based on criteria and convert to list
+        existing_questions = df[
+            (df['subject'] == subject) & 
+            (df['subcategory'] == subcategory)
+        ]["question"].to_list()
+
+        # Return unique questions joined by commas
+        return ",".join(set(existing_questions)) if existing_questions else ""
+
+    except FileNotFoundError:
+        print(f"Error: CSV file not found at {config.LOCAL_QUIZ_CACHE}")
         return ""
-
-def construct_llm_response(llm_response: str, config: Config) -> None:
-    """
-    Construct LLM's response to store a csv file.
-    1. Set up a DataFrame to structure the quiz questions
-    2. Extract dataframe-format in LLM's response 
-    [BACKLOG] 3. Insert a new records to db
-    """
+    except pd.errors.EmptyDataError:
+        print("Error: CSV file is empty")
+        return ""
+    except KeyError as e:
+        print(f"Error: {str(e)}")
+        return ""
+    except Exception as e:
+        print(f"Unexpected error: {str(e)}")
+        return ""
+    
+def construct_llm_response(config: Config, llm_response: str, subject, subcategory, difficulty) -> None:
+    """"""
     if not llm_response:
         logger.error("Empty LLM response")
         return
@@ -293,43 +179,68 @@ def construct_llm_response(llm_response: str, config: Config) -> None:
         "answer": pd.Series(dtype="boolean"),
         "rationale": pd.Series(dtype="str")
     })
+        
+    # Init DF extractor
+    df_rows_program = DFRowsProgram.from_defaults(
+        pydantic_program_cls=OpenAIPydanticProgram,
+        df=df
+    )
+    result_obj = df_rows_program(input_str=llm_response)
+    df = result_obj.to_df(existing_df=df)
 
-    # Construct Output schema
-    class OutputSchema(BaseModel):
-        question: str
-        answer: bool
-        rationale: str
+    df["subject"] = subject
+    df["subcategory"] = subcategory
+    df["difficulty"] = difficulty
 
-    try:
-        # Init DF extractor
-        df_rows_program = DFRowsProgram.from_defaults(
-            pydantic_program_cls=OpenAIPydanticProgram,
-            pydantic_program_kwargs={"output_cls": OutputSchema},
-            df=df
+    # Save
+    df.to_csv(config.LOCAL_QUIZ_CACHE, mode="a", index=False, header=False)
+    logger.info("Successfully save a new quiz to cache")
+
+def generate_quiz(config: Config, num_quizzes: int) -> None:
+    """
+    """
+    # Load Indexes
+    storage_context = StorageContext.from_defaults(persist_dir=config.LOCAL_CACHE_PATH)
+    vector_index = load_index_from_storage(storage_context, index_id="vector")
+    # Init QueryEngine
+    query_engine = vector_index.as_query_engine()
+
+    for _ in tqdm(range(num_quizzes), desc="Generating quizzes ..."):
+        # Metadata
+        metadata = metadata_filter()
+        subject = metadata["subject"]
+        subcategory = metadata["subcategory"]
+        difficulty = metadata["difficulty"]
+
+        # Extract existing responses
+        avoiding_questions = existing_response_filter(config, subject=subject, subcategory=subcategory)
+
+        prompt = prompt_temple.format(
+            context=context,
+            task=task,
+            role=role,
+            difficulty_level=difficulty,
+            subject=subject,
+            subcategory=subcategory,
+            avoid=avoiding_questions,
+            output=(
+                "Return a JSON object with the following structure: "
+                "{\"question\": \"<quiz question>\", \"answer\": <boolean>, \"rationale\": \"<explanation>\"}. "
+                "The 'answer' field must be a boolean value (True or False, no punctuation). "
+                "Example: {\"question\": \"Is the sky blue?\", \"answer\": True, \"rationale\": \"The sky appears blue due to Rayleigh scattering.\"}"
+            )
         )
-        result_obj = df_rows_program(input_str=llm_response)
-        df_quiz = result_obj.to_df(existing_df=df)
-        # logger.info(f"DataFram Extraction: <Done>")
-        # logger.info(f"DataFrame Contents:\n{df_quiz}")
-        # logger.info(f"DataFrame dtypes:\n{df_quiz.dtypes}")
-        df_quiz.to_csv(config.LOCAL_QUIZ_CACHE, index=False)
-    except Exception as e:
-        logger.error(f"Failed to contruct DataFram: {e}")
-
-def create_quiz() -> None:
-    """
-    Entry point
-    """
-    # sync_cache_local_and_s3()
-    ingestion(config)
-    indexing(config)
-    # update_cache_to_s3()
-    llm_response = querying(config)
-    # logger.info(f"LLM Response: \n{llm_response}")
-    construct_llm_response(llm_response=llm_response, config=config)
+        
+        try:
+            response = query_engine.query(prompt)
+            logger.info(f"Query done")
+        except Exception as e:
+            logger.error(f"Query failed: {e}")
+            return ""
+        
+        # Contruct Outcomes
+        construct_llm_response(config, llm_response=response, subject=subject, subcategory=subcategory, difficulty=difficulty)
 
 if __name__ == "__main__":
-    create_quiz()
-
-    
-
+    num_quizzes = 100
+    generate_quiz(config, num_quizzes)
