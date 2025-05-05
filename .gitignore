@@ -6,3 +6,4 @@ venv/
 .env
 src/__pycache__
 archive/
+my_note.md
