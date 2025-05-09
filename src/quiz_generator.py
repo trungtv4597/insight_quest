@@ -20,7 +20,7 @@ class Config:
     Centralizes configuration, ensures required variables are set and reduces global namespace pollution.
     """
     def __init__(self):
-        load_dotenv()
+        load_dotenv(override=True)
 
         # Document Storage Map
         self.LOCAL_DOCUMENT_MAP = os.getenv("LOCAL_DOCUMENT_MAP")
@@ -88,7 +88,7 @@ def metadata_filter() -> Dict:
     df = pd.read_csv(r"C:\Users\Dell\OneDrive\Documents\documents\map_of_content.csv")
 
     # Ensure required columns exist
-    required_columns = ['subject', 'subcategory']
+    required_columns = ['subject', 'subcategory', 'topic']
     if not all(col in df.columns for col in required_columns):
         raise ValueError("CSV must contain 'subject', 'subcategory' columns")
     
@@ -100,16 +100,22 @@ def metadata_filter() -> Dict:
     subcategories = df[df['subject'] == selected_subject]['subcategory'].unique()
     selected_subcategory = random.choice(subcategories)
 
+    # Filter for topics under the selected subject and subcategory
+    topics = df[(df['subject'] == selected_subject) & 
+                (df['subcategory'] == selected_subcategory)]['topic'].unique()
+    selected_topic = random.choice(topics)
+
     # Difficulty Level
-    selected_difficulty = random.choice(["junior engineer", "senior engineer"])
+    selected_difficulty = random.choice(["general definition", "heavily technical interview"])
     
     return {
         'subject': selected_subject,
         'subcategory': selected_subcategory,
+        'topic': selected_topic,
         'difficulty': selected_difficulty,
     }
 
-def existing_response_filter(config: Config, subject: str, subcategory: str) -> str:
+def existing_response_filter(config: Config, subject: str, subcategory: str, topic: str) -> str:
     """
     Filters and retrieves unique questions from a CSV file based on subject, subcategory.
 
@@ -142,7 +148,7 @@ def existing_response_filter(config: Config, subject: str, subcategory: str) -> 
         df = pd.read_csv(config.LOCAL_QUIZ_CACHE)
 
         # Verify required columns exist
-        required_columns = {'subject', 'subcategory', 'question'}
+        required_columns = {'subject', 'subcategory', 'topic', 'question'}
         if not required_columns.issubset(df.columns):
             raise KeyError(f"CSV missing required columns: {required_columns - set(df.columns)}")
 
@@ -150,6 +156,7 @@ def existing_response_filter(config: Config, subject: str, subcategory: str) -> 
         existing_questions = df[
             (df['subject'] == subject) & 
             (df['subcategory'] == subcategory)
+            # (df['subcategory'] == topic)
         ]["question"].to_list()
 
         # Return unique questions joined by commas
@@ -168,7 +175,7 @@ def existing_response_filter(config: Config, subject: str, subcategory: str) -> 
         print(f"Unexpected error: {str(e)}")
         return ""
     
-def construct_llm_response(config: Config, llm_response: str, subject, subcategory, difficulty) -> None:
+def construct_llm_response(config: Config, llm_response: str, subject: str, subcategory: str, topic: str, difficulty: str) -> None:
     """"""
     if not llm_response:
         logger.error("Empty LLM response")
@@ -190,7 +197,9 @@ def construct_llm_response(config: Config, llm_response: str, subject, subcatego
 
     df["subject"] = subject
     df["subcategory"] = subcategory
+    df["topic"] = topic
     df["difficulty"] = difficulty
+    df["model"] = config.OPENAI_FM
 
     # Save
     df.to_csv(config.LOCAL_QUIZ_CACHE, mode="a", index=False, header=False)
@@ -210,10 +219,11 @@ def generate_quiz(config: Config, num_quizzes: int) -> None:
         metadata = metadata_filter()
         subject = metadata["subject"]
         subcategory = metadata["subcategory"]
+        topic = metadata["topic"]
         difficulty = metadata["difficulty"]
 
         # Extract existing responses
-        avoiding_questions = existing_response_filter(config, subject=subject, subcategory=subcategory)
+        avoiding_questions = existing_response_filter(config, subject=subject, subcategory=subcategory, topic=topic)
 
         prompt = prompt_temple.format(
             context=context,
@@ -239,8 +249,8 @@ def generate_quiz(config: Config, num_quizzes: int) -> None:
             return ""
         
         # Contruct Outcomes
-        construct_llm_response(config, llm_response=response, subject=subject, subcategory=subcategory, difficulty=difficulty)
+        construct_llm_response(config, llm_response=response, subject=subject, subcategory=subcategory, difficulty=difficulty, topic=topic)
 
 if __name__ == "__main__":
-    num_quizzes = 100
+    num_quizzes = 50
     generate_quiz(config, num_quizzes)

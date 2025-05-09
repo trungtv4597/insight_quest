@@ -10,7 +10,7 @@ prompt_temple = RichPromptTemplate(
     ---
     Please focus on Subject: {{subject}} / Subcategory: {{subcategory}}
     ---
-    Difficulty Level: treat me as a {{difficulty_level}}
+    Difficulty Level: {{difficulty_level}}
     ---
     Output Structure: {{output}}
     ---
